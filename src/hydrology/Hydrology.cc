@@ -21,6 +21,7 @@
 #include "pism/util/io/File.hh"
 #include "pism/util/array/CellType.hh"
 #include "pism/geometry/Geometry.hh"
+#include "pism/coupler/surface/TemperatureIndex.hh" // needed to grab srunoff variable
 
 namespace pism {
 namespace hydrology {
@@ -275,8 +276,10 @@ Inputs::Inputs() {
   no_model_mask      = nullptr;
 }
 
-Hydrology::Hydrology(std::shared_ptr<const Grid> g)
+Hydrology::Hydrology(std::shared_ptr<const Grid> g,
+                     std::shared_ptr<surface::SurfaceModel> surface)
     : Component(g),
+      m_surface_model(surface),
       m_Q(m_grid, "water_flux"),
       m_Wtill(m_grid, "tillwat"),
       m_W(m_grid, "bwat"),
@@ -295,7 +298,7 @@ Hydrology::Hydrology(std::shared_ptr<const Grid> g)
   m_surface_input_rate.metadata(0)
       .long_name("hydrology model workspace for water input rate from the ice surface")
       .units("m s^-1");
-
+      
   m_basal_melt_rate.metadata(0)
       .long_name("hydrology model workspace for water input rate due to basal melt")
       .units("m s^-1");
@@ -406,7 +409,7 @@ void Hydrology::update(double t, double dt, const Inputs &inputs) {
   compute_overburden_pressure(inputs.geometry->ice_thickness, m_Pover);
 
   compute_surface_input_rate(inputs.geometry->cell_type, inputs.surface_input_rate,
-                             m_surface_input_rate);
+                             m_surface_input_rate, dt);
   compute_basal_melt_rate(inputs.geometry->cell_type, *inputs.basal_melt_rate, m_basal_melt_rate);
 
   array::AccessScope list{ &m_W, &m_Wtill, &m_total_change };
@@ -592,14 +595,28 @@ void check_bounds(const array::Scalar &W, double W_max) {
 */
 void Hydrology::compute_surface_input_rate(const array::CellType &mask,
                                            const array::Scalar *surface_input_rate,
-                                           array::Scalar &result) {
+                                           array::Scalar &result,
+                                           double dt) {
 
-  if (not surface_input_rate) {
+  const bool use_runoff = m_config->get_flag("hydrology.use_surface_runoff");
+
+  const array::Scalar *input = nullptr;
+
+  if (use_runoff) {
+    const array::Scalar &runoff = m_surface_model->runoff();
+    result.copy_from(runoff);
+    // scale the runoff by the density of water
+    // to convert from kg m-2 to kg m-2 s-1
+    result.scale(1.0 / dt);
+    input = &result;
+  } else if (surface_input_rate) {
+    input = surface_input_rate;
+  } else {
     result.set(0.0);
     return;
   }
 
-  array::AccessScope list{surface_input_rate, &mask, &result};
+  array::AccessScope list{input, &mask, &result};
 
   const double
     water_density = m_config->get_number("constants.fresh_water.density");
@@ -608,7 +625,7 @@ void Hydrology::compute_surface_input_rate(const array::CellType &mask,
     const int i = p.i(), j = p.j();
 
     if (mask.icy(i, j)) {
-      result(i,j) = (*surface_input_rate)(i, j) / water_density;
+      result(i,j) = (*input)(i, j) / water_density;
     } else {
       result(i,j) = 0.0;
     }

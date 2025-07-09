@@ -42,7 +42,8 @@ namespace hydrology {
 */
 class Distributed : public Routing {
 public:
-  Distributed(std::shared_ptr<const Grid> g);
+  Distributed(std::shared_ptr<const Grid> g,
+              std::shared_ptr<surface::SurfaceModel> surface);
   virtual ~Distributed() = default;
 
   const array::Scalar& subglacial_water_pressure() const;

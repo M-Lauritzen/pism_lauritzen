@@ -28,8 +28,9 @@
 namespace pism {
 namespace hydrology {
 
-Distributed::Distributed(std::shared_ptr<const Grid> g)
-    : Routing(g), m_P(m_grid, "bwp"), m_Pnew(m_grid, "Pnew_internal") {
+Distributed::Distributed(std::shared_ptr<const Grid> g,
+                         std::shared_ptr<surface::SurfaceModel> surface)
+    : Routing(g, surface), m_P(m_grid, "bwp"), m_Pnew(m_grid, "Pnew_internal") {
 
   // additional variables beyond hydrology::Routing
   m_P.metadata(0)

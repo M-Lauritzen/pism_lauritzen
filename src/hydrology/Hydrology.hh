@@ -21,6 +21,7 @@
 
 #include "pism/util/array/Vector.hh"
 #include "pism/util/Component.hh"
+#include "pism/coupler/SurfaceModel.hh"
 
 namespace pism {
 
@@ -108,7 +109,9 @@ public:
 */
 class Hydrology : public Component {
 public:
-  Hydrology(std::shared_ptr<const Grid> g);
+  Hydrology(std::shared_ptr<const Grid> g,
+            std::shared_ptr<surface::SurfaceModel> surface);
+
   virtual ~Hydrology() = default;
 
   void restart(const File &input_file, int record);
@@ -157,12 +160,16 @@ protected:
 
   void compute_surface_input_rate(const array::CellType &mask,
                                   const array::Scalar *surface_input_rate,
-                                  array::Scalar &result);
+                                  array::Scalar &result,
+                                  double dt);
 
   void compute_basal_melt_rate(const array::CellType &mask,
                                const array::Scalar &basal_melt_rate,
                                array::Scalar &result);
 protected:
+  //! pointer to the surface model (e.g., TemperatureIndex)
+  std::shared_ptr<surface::SurfaceModel> m_surface_model;
+
   // water flux on the regular grid
   array::Vector m_Q;
 

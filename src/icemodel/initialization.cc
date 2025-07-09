@@ -610,13 +610,13 @@ void IceModel::allocate_subglacial_hydrology() {
   m_log->message(2, "# Allocating a subglacial hydrology model...\n");
 
   if (hydrology_model == "null") {
-    m_subglacial_hydrology.reset(new NullTransport(m_grid));
+    m_subglacial_hydrology.reset(new NullTransport(m_grid, m_surface));
   } else if (hydrology_model == "routing") {
-    m_subglacial_hydrology.reset(new Routing(m_grid));
+    m_subglacial_hydrology.reset(new Routing(m_grid, m_surface));
   } else if (hydrology_model == "steady") {
-    m_subglacial_hydrology.reset(new SteadyState(m_grid));
+    m_subglacial_hydrology.reset(new SteadyState(m_grid, m_surface));
   } else if (hydrology_model == "distributed") {
-    m_subglacial_hydrology.reset(new Distributed(m_grid));
+    m_subglacial_hydrology.reset(new Distributed(m_grid, m_surface));
   } else {
     throw RuntimeError::formatted(PISM_ERROR_LOCATION,
                                   "unknown 'hydrology.model': %s", hydrology_model.c_str());
@@ -670,6 +670,9 @@ void IceModel::allocate_submodels() {
 
   allocate_stressbalance();
 
+  // Surface model is needed by the hydrology model
+  allocate_couplers();
+
   // this has to happen *after* allocate_stressbalance()
   {
     allocate_age_model();
@@ -685,7 +688,6 @@ void IceModel::allocate_submodels() {
 
   allocate_bed_deformation();
 
-  allocate_couplers();
 
   if (m_config->get_flag("fracture_density.enabled")) {
     m_fracture = std::make_shared<FractureDensity>(m_grid, m_stress_balance->shallow()->flow_law());

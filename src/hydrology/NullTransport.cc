@@ -26,8 +26,9 @@
 namespace pism {
 namespace hydrology {
 
-NullTransport::NullTransport(std::shared_ptr<const Grid> g)
-    : Hydrology(g), m_Wtill_old(m_grid, "Wtill_old") {
+NullTransport::NullTransport(std::shared_ptr<const Grid> g,
+                             std::shared_ptr<surface::SurfaceModel> surface)
+    : Hydrology(g, surface), m_Wtill_old(m_grid, "Wtill_old") {
 
   m_diffuse_tillwat    = m_config->get_flag("hydrology.null_diffuse_till_water");
   m_diffusion_time     = m_config->get_number("hydrology.null_diffusion_time", "seconds");
