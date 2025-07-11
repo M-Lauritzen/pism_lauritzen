@@ -1444,11 +1444,11 @@ netcdf pism_config {
     pism_config:hydrology.tillwat_max_type = "number";
     pism_config:hydrology.tillwat_max_units = "meters";
 
-    pism_config:hydrology.use_surface_runoff = "false";
-    pism_config:hydrology.use_surface_runoff_doc = "if true, include surface runoff from the surface model in the basal hydrology";
-    pism_config:hydrology.use_surface_runoff_option = "hydrology_use_surface_runoff";
-    pism_config:hydrology.use_surface_runoff_type = "flag";
-    pism_config:hydrology.use_surface_runoff_units = "none";
+    pism_config:hydrology.use_pdd_runoff = "false";
+    pism_config:hydrology.use_pdd_runoff_doc = "if true, include surface runoff from the PDD model in the basal hydrology";
+    pism_config:hydrology.use_pdd_runoff_option = "hydrology_use_pdd_runoff";
+    pism_config:hydrology.use_pdd_runoff_type = "flag";
+    pism_config:hydrology.use_pdd_runoff_units = "none";
 
     pism_config:input.bootstrap = "no";
     pism_config:input.bootstrap_doc = "It true, use bootstrapping heuristics when initializing PISM.";

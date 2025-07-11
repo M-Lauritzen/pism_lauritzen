@@ -598,7 +598,7 @@ void Hydrology::compute_surface_input_rate(const array::CellType &mask,
                                            array::Scalar &result,
                                            double dt) {
 
-  const bool use_runoff = m_config->get_flag("hydrology.use_surface_runoff");
+  const bool use_runoff = m_config->get_flag("hydrology.use_pdd_runoff");
 
   const array::Scalar *input = nullptr;
 
