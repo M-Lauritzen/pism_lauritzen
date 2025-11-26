@@ -54,7 +54,6 @@ protected:
   array::Scalar m_effective_pressure;   // effective pressure from hydrology
   array::Scalar m_sliding_mechanism;    // identifies which sliding regime applies
   array::Scalar m_till_cover_local;     // local sediment fraction
-  array::Scalar m_velocity_temp;        // hydrology velocity field
   array::Scalar hydro_tauc;             // yield stress computed in hydrology
   array::Scalar tauc_ratio;             // ratio between hydrology and sediment tauc
   array::Scalar m_till_phi;             // till friction angle

@@ -38,8 +38,7 @@ public:
   // Pointers to the subglacial hydrology flux and gradient
   const array::Vector *hydrology_flux;
   const array::Scalar *hydrology_gradient;
-
-  const array::Vector *basal_velocity;
+  const array::Scalar *ice_sliding_speed;
 
   // inputs used by regional models
   const array::Scalar *no_model_mask;

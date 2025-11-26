@@ -365,12 +365,16 @@ energy::Inputs IceModel::energy_model_inputs() {
 YieldStressInputs IceModel::yield_stress_inputs() {
   YieldStressInputs result;
 
+  array::Scalar &sliding_speed = *m_work2d[0];
+  compute_magnitude(m_stress_balance->advective_velocity(), sliding_speed);
+
   result.geometry                   = &m_geometry;
   result.till_water_thickness       = &m_subglacial_hydrology->till_water_thickness();
   result.subglacial_water_thickness = &m_subglacial_hydrology->subglacial_water_thickness();
   result.hydrology_flux             = &m_subglacial_hydrology->flux();
   result.hydrology_gradient         = nullptr;
-  
+  result.ice_sliding_speed          = &sliding_speed;
+
   // Add hydraulic gradient *only if Routing hydrology is active*
   if (auto routing = dynamic_cast<const hydrology::Routing*>(m_subglacial_hydrology.get())) {
     result.hydrology_gradient = &routing->hydraulic_potential_gradient();

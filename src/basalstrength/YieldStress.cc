@@ -31,6 +31,7 @@ YieldStressInputs::YieldStressInputs() {
   subglacial_water_thickness = nullptr;
   hydrology_flux             = nullptr;
   hydrology_gradient         = nullptr;
+  ice_sliding_speed          = nullptr;
 }
 
 YieldStress::YieldStress(std::shared_ptr<const Grid> g)

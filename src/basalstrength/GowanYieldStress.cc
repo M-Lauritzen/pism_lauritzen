@@ -95,7 +95,6 @@ GowanYieldStress::GowanYieldStress(std::shared_ptr<const Grid> grid)
     m_effective_pressure(grid, "effective_pressure"),
     m_sliding_mechanism(grid, "sliding_mechanism"),
     m_till_cover_local(grid, "till_cover_local"),
-    m_velocity_temp(grid, "velocity_temp"), // FIXME: shold use the basal velocity from ice model
     hydro_tauc(grid, "hydro_tauc"),
     tauc_ratio(grid, "tauc_ratio"),
     m_till_phi(grid, "till_phi"),
@@ -138,10 +137,6 @@ GowanYieldStress::GowanYieldStress(std::shared_ptr<const Grid> grid)
       .units("1")
       .set_time_independent(true);
 
-  m_velocity_temp.metadata()
-      .long_name("temporary basal velocity magnitude")
-      .units("m s-1");
-
   hydro_tauc.metadata()
       .long_name("yield stress from hydrology module")
       .units("Pa");
@@ -161,7 +156,6 @@ void GowanYieldStress::restart_impl(const File &input_file, int record) {
   m_effective_pressure.read(input_file, record);
   m_sliding_mechanism.read(input_file, record);
   m_till_cover_local.read(input_file, record);
-  m_velocity_temp.read(input_file, record);
   hydro_tauc.read(input_file, record);
   tauc_ratio.read(input_file, record);
 }
@@ -171,7 +165,6 @@ void GowanYieldStress::set_default_fields() {
   m_effective_pressure.set(0.0);
   m_sliding_mechanism.set(0.0);
   m_till_cover_local.set(m_config->get_number("basal_yield_stress.gowan.till_fraction_coverage")); // sets the fraction of till cover uniformly
-  m_velocity_temp.set(0.1); //FIXME: needs right basal velocity magnitude
   hydro_tauc.set(0.0);
   tauc_ratio.set(0.0);
 }
@@ -232,7 +225,6 @@ void GowanYieldStress::define_model_state_impl(const File &output) const {
   m_effective_pressure.define(output, io::PISM_DOUBLE);
   m_sliding_mechanism.define(output, io::PISM_DOUBLE);
   m_till_cover_local.define(output, io::PISM_DOUBLE);
-  m_velocity_temp.define(output, io::PISM_DOUBLE);
   hydro_tauc.define(output, io::PISM_DOUBLE);
   tauc_ratio.define(output, io::PISM_DOUBLE);
 }
@@ -247,7 +239,6 @@ void GowanYieldStress::write_model_state_impl(const File &output) const {
   m_effective_pressure.write(output);
   m_sliding_mechanism.write(output);
   m_till_cover_local.write(output);
-  m_velocity_temp.write(output);
   hydro_tauc.write(output);
   tauc_ratio.write(output);
 }
@@ -307,7 +298,6 @@ void GowanYieldStress::update_impl(const YieldStressInputs &inputs,
                rocky_phi_deg       = m_config->get_number("basal_yield_stress.gowan.rocky_phi"),
                seddy_phi_deg       = m_config->get_number("basal_yield_stress.gowan.seddy_phi"), 
                tau_ice_rock        = m_config->get_number("basal_yield_stress.gowan.ice_rock_yield_stress"), //1e5 Pa
-               tillwat_max         = m_config->get_number("hydrology.tillwat_max"), // max water in till (m) 2m
                rchanneldistance    = m_config->get_number("basal_yield_stress.gowan.Rothsliberger_distance"), // 12 km
                protrusion_height   = m_config->get_number("basal_yield_stress.gowan.protrusion_height"); // 0.01 m
 
@@ -325,14 +315,15 @@ void GowanYieldStress::update_impl(const YieldStressInputs &inputs,
   const array::Vector &Q              = *inputs.hydrology_flux;   // water flux (m²/s)
   const array::Scalar &grad           = *inputs.hydrology_gradient, // |∇ψ| (Pa/m)
                       &W_till         = *inputs.till_water_thickness,
-                      &ice_thickness  = inputs.geometry->ice_thickness;
+                      &ice_thickness  = inputs.geometry->ice_thickness,
+                      &sliding_speed  = *inputs.ice_sliding_speed;
+
   const auto          &cell_type      = inputs.geometry->cell_type;
   const auto          &bed_topography = inputs.geometry->bed_elevation;
   const auto          &sea_level      = inputs.geometry->sea_level_elevation;
 
   array::AccessScope scope{&W_till, &Q, &grad, &cell_type, &m_basal_yield_stress, &hydro_tauc, &tauc_ratio,
-                             &m_sliding_mechanism, &m_till_phi, &m_effective_pressure, &m_till_cover_local,
-                             &m_velocity_temp, &bed_topography, &sea_level, &ice_thickness};
+                             &m_sliding_mechanism, &m_till_phi, &m_effective_pressure, &m_till_cover_local, &bed_topography, &sea_level, &ice_thickness, &sliding_speed};
 
    {
     
@@ -401,18 +392,18 @@ void GowanYieldStress::update_impl(const YieldStressInputs &inputs,
 
       // Hydrology-based sliding yield stress (only if velocity > 0):
       double yield_stress_hydrology = high_tauc;
-      if (m_velocity_temp(i, j) > 0.0) {
+      if (sliding_speed(i, j) > 0.0) {
 
         const double qx = Q(i, j).u;
         const double qy = Q(i, j).v;
         const double gradpsi = grad(i, j);
-        const double vel2 = m_velocity_temp(i, j); // FIXME: needs right basal velocity magnitude squared
+        const double vel2 = sliding_speed(i, j);
 
-        const double qmag = std::sqrt(qx * qx + qy * qy) * rchanneldistance / m_dx; // FIXME: only uses dx
+        const double Q_rchannel = std::sqrt(qx * qx + qy * qy) * rchanneldistance / m_dx; // FIXME: only uses dx
         
         // Schoof (2010), Eq. (2):
-        double num = c1 * qmag * gradpsi + vel2 * protrusion_height;
-        double denom = c2 * std::pow(c3, -1.0/alpha) * std::pow(qmag, 1.0/alpha) * std::pow(gradpsi, -1.0 / (2.0 * alpha));
+        double num = c1 * Q_rchannel * gradpsi + vel2 * protrusion_height;
+        double denom = c2 * std::pow(c3, -1.0/alpha) * std::pow(Q_rchannel, 1.0/alpha) * std::pow(gradpsi, -1.0 / (2.0 * alpha));
         double N_eff = std::pow(num / denom, 1.0 / Glen_exponent);
 
         if (!std::isfinite(N_eff)) {
