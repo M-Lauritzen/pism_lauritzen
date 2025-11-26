@@ -135,6 +135,9 @@ public:
   const array::Scalar& mass_change_due_to_conservation_error() const;
   const array::Scalar& mass_change_due_to_input() const;
   const array::Scalar& mass_change_due_to_lateral_flow() const;
+  
+  //! Return the magnitude of the hydraulic potential gradient (if available).
+  virtual const array::Scalar& hydraulic_potential_gradient() const;
 
 protected:
   virtual void restart_impl(const File &input_file, int record);

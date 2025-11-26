@@ -16,6 +16,10 @@
 // along with PISM; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
+#include <algorithm>
+#include <cmath>
+
+#include "pism/basalstrength/GowanYieldStress.hh"
 #include "pism/basalstrength/MohrCoulombYieldStress.hh"
 #include "pism/basalstrength/MohrCoulombPointwise.hh"
 
@@ -32,9 +36,9 @@
 
 namespace pism {
 
-//! \file MohrCoulombYieldStress.cc  Process model which computes pseudo-plastic yield stress for the subglacial layer.
+//! \file GowanYieldStress.cc  Process model which computes pseudo-plastic yield stress for the subglacial layer.
 
-/*! \file MohrCoulombYieldStress.cc
+/*! \file GowanYieldStress.cc
 The output variable of this submodel is `tauc`, the pseudo-plastic yield stress
 field that is used in the ShallowStressBalance objects.  This quantity is
 computed by the Mohr-Coulomb criterion [\ref SchoofTill], but using an empirical
@@ -86,19 +90,27 @@ This determines the map of @f$\varphi(x,y)@f$.  If this option is note given,
 the current method leaves `tillphi` unchanged, and thus either in its
 read-in-from-file state or with a default constant value from the config file.
 */
-MohrCoulombYieldStress::MohrCoulombYieldStress(std::shared_ptr<const Grid> grid)
-  : YieldStress(grid),
-  m_till_phi(m_grid, "tillphi") {
+GowanYieldStress::GowanYieldStress(std::shared_ptr<const Grid> grid)
+  : MohrCoulombYieldStress(grid),
+    m_effective_pressure(grid, "effective_pressure"),
+    m_sliding_mechanism(grid, "sliding_mechanism"),
+    m_till_cover_local(grid, "till_cover_local"),
+    m_velocity_temp(grid, "velocity_temp"), // FIXME: shold use the basal velocity from ice model
+    hydro_tauc(grid, "hydro_tauc"),
+    tauc_ratio(grid, "tauc_ratio"),
+    m_till_phi(grid, "till_phi"),
+    m_dx(grid->dx()),
+    m_dy(grid->dy())
+{
 
-  m_name = "Mohr-Coulomb yield stress model";
+  m_name = "Gowan yield stress model";
 
   m_till_phi.metadata()
       .long_name("friction angle for till under grounded ice sheet")
       .units("degrees")
       .set_time_independent(true);
 
-  // in this model; need not be time-independent in general
-
+  // This model requires till to be present
   {
     std::string hydrology_tillwat_max = "hydrology.tillwat_max";
     bool till_is_present = m_config->get_number(hydrology_tillwat_max) > 0.0;
@@ -111,77 +123,89 @@ MohrCoulombYieldStress::MohrCoulombYieldStress(std::shared_ptr<const Grid> grid)
     }
   }
 
-  auto delta_file = m_config->get_string("basal_yield_stress.mohr_coulomb.delta.file");
+  // --- Gowan's additional diagnostic/state fields ---
 
-  if (not delta_file.empty()) {
-    ForcingOptions opt(*m_grid->ctx(), "basal_yield_stress.mohr_coulomb.delta");
+  m_effective_pressure.metadata()
+      .long_name("effective pressure in drainage system")
+      .units("Pa");
 
-    unsigned int buffer_size = m_config->get_number("input.forcing.buffer_size");
+  m_sliding_mechanism.metadata()
+      .long_name("sliding mechanism flag")
+      .units("1");
 
-    File file(m_grid->com, opt.filename, io::PISM_NETCDF3, io::PISM_READONLY);
+  m_till_cover_local.metadata()
+      .long_name("local till cover fraction")
+      .units("1")
+      .set_time_independent(true);
 
-    m_delta = std::make_shared<array::Forcing>(m_grid,
-                                          file,
-                                          "mohr_coulomb_delta",
-                                          "", // no standard name
-                                          buffer_size,
-                                          opt.periodic, LINEAR);
-    m_delta->metadata()
-        .long_name("minimum effective pressure on till as a fraction of overburden pressure")
-        .units("1");
-  }
+  m_velocity_temp.metadata()
+      .long_name("temporary basal velocity magnitude")
+      .units("m s-1");
+
+  hydro_tauc.metadata()
+      .long_name("yield stress from hydrology module")
+      .units("Pa");
+
+  tauc_ratio.metadata()
+      .long_name("ratio of hydrology and sediment yield stress")
+      .units("1");
 }
 
-void MohrCoulombYieldStress::restart_impl(const File &input_file, int record) {
+
+void GowanYieldStress::restart_impl(const File &input_file, int record) {
+  // read common fields from the base model
   m_basal_yield_stress.read(input_file, record);
   m_till_phi.read(input_file, record);
+
+  // read Gowan-specific diagnostic fields (if present)
+  m_effective_pressure.read(input_file, record);
+  m_sliding_mechanism.read(input_file, record);
+  m_till_cover_local.read(input_file, record);
+  m_velocity_temp.read(input_file, record);
+  hydro_tauc.read(input_file, record);
+  tauc_ratio.read(input_file, record);
 }
 
+void GowanYieldStress::set_default_fields() {
+  // Set default values for fields
+  m_effective_pressure.set(0.0);
+  m_sliding_mechanism.set(0.0);
+  m_till_cover_local.set(m_config->get_number("basal_yield_stress.gowan.till_fraction_coverage")); // sets the fraction of till cover uniformly
+  m_velocity_temp.set(0.1); //FIXME: needs right basal velocity magnitude
+  hydro_tauc.set(0.0);
+  tauc_ratio.set(0.0);
+}
 
 //! Initialize the pseudo-plastic till mechanical model.
-void MohrCoulombYieldStress::bootstrap_impl(const File &input_file,
-                                            const YieldStressInputs &inputs) {
+void GowanYieldStress::bootstrap_impl(const File &input_file,
+                                                const YieldStressInputs &inputs) {
 
-  auto tauc_to_phi_file = m_config->get_string("basal_yield_stress.mohr_coulomb.tauc_to_phi.file");
+  m_log->message(2, "* Bootstrapping GowanYieldStress ...\n");
 
-  if (not tauc_to_phi_file.empty()) {
-    m_basal_yield_stress.regrid(tauc_to_phi_file, io::Default::Nil());
+  const double high_tauc = m_config->get_number("basal_yield_stress.ice_free_bedrock");
 
-    m_log->message(2,
-                   "  Will compute till friction angle (tillphi) as a function"
-                   " of the yield stress (tauc)...\n");
+  // Initialize the basal yield stress field
+  m_basal_yield_stress.regrid(input_file, io::Default(high_tauc));
 
-    till_friction_angle(m_basal_yield_stress,
-                        *inputs.till_water_thickness,
-                        inputs.geometry->ice_thickness,
-                        inputs.geometry->cell_type,
-                        m_till_phi);
+  double till_phi_default = m_config->get_number("basal_yield_stress.mohr_coulomb.till_phi_default");
+  m_till_phi.regrid(input_file, io::Default(till_phi_default));
 
-  } else if (m_config->get_flag("basal_yield_stress.mohr_coulomb.topg_to_phi.enabled")) {
-
-    m_log->message(2, "  creating till friction angle map from bed elevation...\n");
-
-    if (input_file.variable_exists(m_till_phi.metadata().get_name())) {
-      // till_phi is present in the input file
-      m_log->message(2,
-                     "PISM WARNING: -topg_to_phi computation will override the '%s' field\n"
-                     "              present in the input file '%s'!\n",
-                     m_till_phi.metadata().get_name().c_str(), input_file.name().c_str());
-    }
-
-    till_friction_angle(inputs.geometry->bed_elevation, m_till_phi);
-
-  } else {
-    double till_phi_default = m_config->get_number("basal_yield_stress.mohr_coulomb.till_phi_default");
-    m_till_phi.regrid(input_file, io::Default(till_phi_default));
-  }
+  // Initialize extra diagnostic fields with default or neutral values.
+  set_default_fields();
 
   finish_initialization(inputs);
 }
 
-void MohrCoulombYieldStress::init_impl(const YieldStressInputs &inputs) {
-  double till_phi_default = m_config->get_number("basal_yield_stress.mohr_coulomb.till_phi_default");
-  m_till_phi.set(till_phi_default);
+
+void GowanYieldStress::init_impl(const YieldStressInputs &inputs) {
+  m_log->message(2, "* Initializing GowanYieldStress ...\n");
+
+  MohrCoulombYieldStress::init_impl(inputs);
+
+  const double high_tauc = m_config->get_number("basal_yield_stress.ice_free_bedrock");
+  m_basal_yield_stress.set(high_tauc);
+
+  set_default_fields();
 
   finish_initialization(inputs);
 }
@@ -189,47 +213,43 @@ void MohrCoulombYieldStress::init_impl(const YieldStressInputs &inputs) {
 /*!
  * Finish initialization after bootstrapping or initializing using constants.
  */
-void MohrCoulombYieldStress::finish_initialization(const YieldStressInputs &inputs) {
-  // regrid if requested, regardless of how initialized
-  regrid(name(), m_till_phi);
+void GowanYieldStress::finish_initialization(const YieldStressInputs &inputs) {  
+  m_log->message(2, "* Finishing initialization for GowanYieldStress ...\n");
 
-  if (m_delta) {
-    ForcingOptions opt(*m_grid->ctx(), "basal_yield_stress.mohr_coulomb.delta");
+  // Default initialization for fields
+  set_default_fields();
 
-    m_delta->init(opt.filename, opt.periodic);
-  }
-
-  // We use a short time step length because we can get away with it here, but we can
-  // probably do better...
-  this->update(inputs, time().current(), 1.0 /* one second time step */);
+  // Ensure all dependent quantities are consistent before time stepping
+  this->update(inputs, time().current(), 1.0);
 }
 
-MaxTimestep MohrCoulombYieldStress::max_timestep_impl(double t) const {
-  (void) t;
-
-  if (m_delta) {
-    auto dt = m_delta->max_timestep(t);
-
-    if (dt.finite()) {
-      return MaxTimestep(dt.value(), name());
-    }
-  }
-
-  return MaxTimestep(name());
-}
-
-void MohrCoulombYieldStress::set_till_friction_angle(const array::Scalar &input) {
-  m_till_phi.copy_from(input);
-}
-
-void MohrCoulombYieldStress::define_model_state_impl(const File &output) const {
+void GowanYieldStress::define_model_state_impl(const File &output) const {
+  // Base model fields
   m_basal_yield_stress.define(output, io::PISM_DOUBLE);
   m_till_phi.define(output, io::PISM_DOUBLE);
+
+  // diagnostic and coupling fields
+  m_effective_pressure.define(output, io::PISM_DOUBLE);
+  m_sliding_mechanism.define(output, io::PISM_DOUBLE);
+  m_till_cover_local.define(output, io::PISM_DOUBLE);
+  m_velocity_temp.define(output, io::PISM_DOUBLE);
+  hydro_tauc.define(output, io::PISM_DOUBLE);
+  tauc_ratio.define(output, io::PISM_DOUBLE);
 }
 
-void MohrCoulombYieldStress::write_model_state_impl(const File &output) const {
+
+void GowanYieldStress::write_model_state_impl(const File &output) const {
+  // Base model fields
   m_basal_yield_stress.write(output);
   m_till_phi.write(output);
+
+  // diagnostic and coupling fields
+  m_effective_pressure.write(output);
+  m_sliding_mechanism.write(output);
+  m_till_cover_local.write(output);
+  m_velocity_temp.write(output);
+  hydro_tauc.write(output);
+  tauc_ratio.write(output);
 }
 
 //! Update the till yield stress for use in the pseudo-plastic till basal stress
@@ -262,185 +282,196 @@ If `basal_yield_stress.add_transportable_water` is yes then @f$ s @f$ in the abo
 becomes @f$ s = (W + W_{till}) / W_{till}^{max} @f$,
 that is, the water amount is the sum @f$ W+W_{till} @f$.
  */
-void MohrCoulombYieldStress::update_impl(const YieldStressInputs &inputs,
-                                         double t, double dt) {
-  (void) t;
-  (void) dt;
 
-  bool slippery_grounding_lines = m_config->get_flag("basal_yield_stress.slippery_grounding_lines"),
-       add_transportable_water  = m_config->get_flag("basal_yield_stress.add_transportable_water");
+void GowanYieldStress::update_impl(const YieldStressInputs &inputs,
+                                             double t, double dt) {
+  (void) t; (void) dt;
+  
+  if (!inputs.hydrology_flux || !inputs.hydrology_gradient) { // Not sure if this is sufficient
+    throw RuntimeError::formatted(PISM_ERROR_LOCATION,
+                                  "The Gowan yield stress model requires hydrology flux and gradient inputs.\n"
+                                  "Ensure that a routing hydrology model is active.");
+  }
 
-  const double
-    ice_density      = m_config->get_number("constants.ice.density"),
-    standard_gravity = m_config->get_number("constants.standard_gravity");
+  const bool slippery_grounding_lines = m_config->get_flag("basal_yield_stress.slippery_grounding_lines");
 
-  const double high_tauc  = m_config->get_number("basal_yield_stress.ice_free_bedrock"),
-               W_till_max = m_config->get_number("hydrology.tillwat_max"),
-               delta      = m_config->get_number("basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden"),
-               tlftw      = m_config->get_number("basal_yield_stress.mohr_coulomb.till_log_factor_transportable_water");
+  const double ice_density         = m_config->get_number("constants.ice.density"),
+               standard_gravity    = m_config->get_number("constants.standard_gravity"),
+               latent_heat         = m_config->get_number("constants.fresh_water.latent_heat_of_fusion"),
+               fresh_water_density = m_config->get_number("constants.fresh_water.density"),
+               arrhenius_parameter = m_config->get_number("flow_law.isothermal_Glen.ice_softness"),
+               Glen_exponent       = m_config->get_number("stress_balance.ssa.Glen_exponent"),
+               // tuneable parameters
+               high_tauc           = m_config->get_number("basal_yield_stress.ice_free_bedrock")*100, //1e6*100 Pa*100, high_tauc is lower than the usual yield stresses calculated by the MohrCoulomb relation
+               delta               = m_config->get_number("basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden"),
+               rocky_phi_deg       = m_config->get_number("basal_yield_stress.gowan.rocky_phi"),
+               seddy_phi_deg       = m_config->get_number("basal_yield_stress.gowan.seddy_phi"), 
+               tau_ice_rock        = m_config->get_number("basal_yield_stress.gowan.ice_rock_yield_stress"), //1e5 Pa
+               tillwat_max         = m_config->get_number("hydrology.tillwat_max"), // max water in till (m) 2m
+               rchanneldistance    = m_config->get_number("basal_yield_stress.gowan.Rothsliberger_distance"), // 12 km
+               protrusion_height   = m_config->get_number("basal_yield_stress.gowan.protrusion_height"); // 0.01 m
+
+  // Derived constants:
+  const double rocky_angle = rocky_phi_deg * M_PI / 180.0;
+  const double seddy_angle = seddy_phi_deg * M_PI / 180.0;
+  const double c1 = 1.0 / (ice_density * latent_heat);
+  const double c2 = 2.0 * arrhenius_parameter * pow(Glen_exponent,-Glen_exponent);
+  const double f = 0.1; // This is hard coded for now
+  const double c3 = pow(2.0,(1.0/4.0)) * pow(M_PI+2.0,(1/2)) / (pow(M_PI,(1/4)) * pow(fresh_water_density*f,(1/2)));
+  const double alpha = 5.0/4.0;
 
   MohrCoulombPointwise mc(m_config);
 
-  const array::Scalar
-    &W_till        = *inputs.till_water_thickness,
-    &W_subglacial  = *inputs.subglacial_water_thickness,
-    &ice_thickness = inputs.geometry->ice_thickness;
+  const array::Vector &Q              = *inputs.hydrology_flux;   // water flux (m²/s)
+  const array::Scalar &grad           = *inputs.hydrology_gradient, // |∇ψ| (Pa/m)
+                      &W_till         = *inputs.till_water_thickness,
+                      &ice_thickness  = inputs.geometry->ice_thickness;
+  const auto          &cell_type      = inputs.geometry->cell_type;
+  const auto          &bed_topography = inputs.geometry->bed_elevation;
+  const auto          &sea_level      = inputs.geometry->sea_level_elevation;
 
-  const auto &cell_type      = inputs.geometry->cell_type;
-  const auto &bed_topography = inputs.geometry->bed_elevation;
-  const auto &sea_level      = inputs.geometry->sea_level_elevation;
+  array::AccessScope scope{&W_till, &Q, &grad, &cell_type, &m_basal_yield_stress, &hydro_tauc, &tauc_ratio,
+                             &m_sliding_mechanism, &m_till_phi, &m_effective_pressure, &m_till_cover_local,
+                             &m_velocity_temp, &bed_topography, &sea_level, &ice_thickness};
 
-  array::AccessScope list{&W_till, &m_till_phi, &m_basal_yield_stress, &cell_type,
-                               &bed_topography, &sea_level, &ice_thickness};
+   {
+    
+    tauc_ratio.set(0.0);
 
-  if (add_transportable_water) {
-    list.add(W_subglacial);
-  }
+    for (auto p = m_grid->points(); p; p.next()) {
+      const int i = p.i(), j = p.j();
 
-  if (m_delta) {
-    m_delta->update(t, dt);
-    m_delta->average(t, dt);
-    list.add(*m_delta);
-  }
-
-  for (auto p = m_grid->points(); p; p.next()) {
-    const int i = p.i(), j = p.j();
-
-    if (cell_type.ice_free(i, j)) {
-      m_basal_yield_stress(i, j) = high_tauc;  // large yield stress if ice-free
-    } else { // grounded and there is some ice
-
-      // user can ask that marine grounding lines get special treatment
-      double water = W_till(i,j); // usual case
-
-      if (slippery_grounding_lines and
-          bed_topography(i, j) <= sea_level(i, j) and
-          (cell_type.next_to_floating_ice(i, j) or cell_type.next_to_ice_free_ocean(i, j))) {
-        water = W_till_max;
-      } else if (add_transportable_water) {
-        water = W_till(i, j) + tlftw * log(1.0 + W_subglacial(i, j) / tlftw);
+      // Ocean & ice-free cases
+      if (cell_type.ocean(i, j)) {
+        m_basal_yield_stress(i, j) = 0.0;
+        m_sliding_mechanism(i, j)  = 0;
+        continue;
+      }
+      if (cell_type.ice_free(i, j)) {
+        m_basal_yield_stress(i, j) = high_tauc;
+        m_sliding_mechanism(i, j)  = 0;
+        continue;
       }
 
-      double P_overburden = ice_density * standard_gravity * ice_thickness(i, j);
+      // Grounded ice
+      double slippery_tauc = high_tauc;
+      double water = W_till(i, j);
 
-      m_basal_yield_stress(i, j) = mc.yield_stress(m_delta ? (*m_delta)(i, j) : delta,
-                                                   P_overburden, water, m_till_phi(i, j));
+      // Optional "slippery grounding lines" // FIXME: needs to be checked, turned off for now
+      // if (slippery_grounding_lines &&
+      //     bed_topography(i, j) <= sea_level(i, j) &&
+      //     (cell_type.next_to_floating_ice(i, j) || cell_type.next_to_ice_free_ocean(i, j))) {
+
+      //   water = tillwat_max;
+
+      //   double grounding_reduction;
+      //   const double z = bed_topography(i, j); // bed elevation (negative below sea level) //What is this? Not continous at z=b=-1000,-2000
+      //   if (z >= -1000.0) {
+      //     grounding_reduction = z * 1.0e-5 + 0.2;      //  ~0.2 at z=0, down to ~0.19 at z=-10m, etc.
+      //   } else if (z >= -2000.0) {
+      //     grounding_reduction = z * 9.0e-6 + 0.019;    // from ~0.010 at -1000 to ~0.001 at -2000
+      //   } else {
+      //     grounding_reduction = 0.001;
+      //   }
+      //   slippery_tauc = ice_thickness(i, j) * standard_gravity * ice_density * grounding_reduction;
+      // }
+
+      // This should be the same as in MohrCoulombPiecewise.cc. Does it have ice/rock cap?
+      // Naming should be more consistent across files.
+      // Sediment = till
+      // Two effective pressures N_till, N_hydro
+      // Doesnt use a delta field but a constant delta read from config.
+
+      double P_overburden = ice_density * standard_gravity * ice_thickness(i, j);
+      // Use MohrCoulombPiecewise for sediment yield stress:
+
+      double tau_sed = mc.yield_stress(delta, P_overburden, water, m_till_phi(i, j));
+
+      // Cap by ice/rock limit, as in Gowan:
+      // if (tau_sed > tau_ice_rock) {
+      //   tau_sed = tau_ice_rock;
+      // }
+
+      // Mix sediment-covered and rock fractions (hydrostatic rock limit):
+      double tau_mix = tau_sed * m_till_cover_local(i, j)
+                     + tau_ice_rock * (1.0 - m_till_cover_local(i, j));
+
+      m_basal_yield_stress(i, j) = tau_mix;
+      m_sliding_mechanism(i, j)  = 1;  // sediment default
+
+      // Hydrology-based sliding yield stress (only if velocity > 0):
+      double yield_stress_hydrology = high_tauc;
+      if (m_velocity_temp(i, j) > 0.0) {
+
+        const double qx = Q(i, j).u;
+        const double qy = Q(i, j).v;
+        const double gradpsi = grad(i, j);
+        const double vel2 = m_velocity_temp(i, j); // FIXME: needs right basal velocity magnitude squared
+
+        const double qmag = std::sqrt(qx * qx + qy * qy) * rchanneldistance / m_dx; // FIXME: only uses dx
+        
+        // Schoof (2010), Eq. (2):
+        double num = c1 * qmag * gradpsi + vel2 * protrusion_height;
+        double denom = c2 * std::pow(c3, -1.0/alpha) * std::pow(qmag, 1.0/alpha) * std::pow(gradpsi, -1.0 / (2.0 * alpha));
+        double N_eff = std::pow(num / denom, 1.0 / Glen_exponent);
+
+        if (!std::isfinite(N_eff)) {
+          N_eff = high_tauc;
+        }
+
+        m_effective_pressure(i, j) = N_eff;
+        // equation 3 in Schoof 2010, used to determine the hydrology system type
+        double Qc = vel2 * protrusion_height / (c1 * (alpha-1.0) * gradpsi); // FIXME: should be stored
+
+        // Rocky and sediment areas (Gowan used tan(phi)*N_eff)
+        double tau_hydro_sed = N_eff * std::tan(seddy_angle);
+
+        // If sediments are weaker than hydro sliding, sediments take precedence (cap):
+        if (tau_sed < tau_hydro_sed) {
+          tau_hydro_sed = tau_sed;
+        }
+
+        yield_stress_hydrology =
+            tau_hydro_sed * m_till_cover_local(i, j)
+          + N_eff * std::tan(rocky_angle) * (1.0 - m_till_cover_local(i, j));
+      }
+
+      hydro_tauc(i, j) = yield_stress_hydrology;
+
+      // Diagnostic ratio (Gowan wrote m_basal / hydro)
+      if (yield_stress_hydrology > 0.0) {
+        tauc_ratio(i, j) = m_basal_yield_stress(i, j) / yield_stress_hydrology;
+      } else {
+        tauc_ratio(i, j) = 0.0;
+      }
+
+      // Pick the MINIMUM of (sediment yield stress) and (hydrology yield stress),
+      if (yield_stress_hydrology < m_basal_yield_stress(i, j)) {
+        m_basal_yield_stress(i, j) = yield_stress_hydrology;
+        m_sliding_mechanism(i, j)  = 2;  // hydrology
+      }
+
+      // then also apply slippery grounding reduction if smaller.
+      // if (slippery_tauc < m_basal_yield_stress(i, j)) {
+      //   m_basal_yield_stress(i, j) = slippery_tauc;
+      //   m_sliding_mechanism(i, j)  = 3;  // slippery GL
+      // }
     }
   }
-
+  
+  m_effective_pressure.update_ghosts();
   m_basal_yield_stress.update_ghosts();
 }
 
-//! Computes the till friction angle phi as a piecewise linear function of bed elevation, according to user options.
-/*!
-Computes the till friction angle \f$\phi(x,y)\f$ at a location as the following
-increasing, piecewise-linear function of the bed elevation \f$b(x,y)\f$.  Let
-        \f[ M = (\phi_{\text{max}} - \phi_{\text{min}}) / (b_{\text{max}} - b_{\text{min}}) \f]
-be the slope of the nontrivial part.  Then
-        \f[ \phi(x,y) = \begin{cases}
-                \phi_{\text{min}}, & b(x,y) \le b_{\text{min}}, \\
-                \phi_{\text{min}} + (b(x,y) - b_{\text{min}}) \,M,
-                                  &  b_{\text{min}} < b(x,y) < b_{\text{max}}, \\
-                \phi_{\text{max}}, & b_{\text{max}} \le b(x,y), \end{cases} \f]
-where \f$\phi_{\text{min}}=\f$`phi_min`, \f$\phi_{\text{max}}=\f$`phi_max`,
-\f$b_{\text{min}}=\f$`topg_min`, \f$b_{\text{max}}=\f$`topg_max`.
-
-The default values are vaguely suitable for Antarctica.  See src/pism_config.cdl.
-*/
-void MohrCoulombYieldStress::till_friction_angle(const array::Scalar &bed_topography,
-                                                 array::Scalar &result) {
-
-  const double
-    phi_min  = m_config->get_number("basal_yield_stress.mohr_coulomb.topg_to_phi.phi_min"),
-    phi_max  = m_config->get_number("basal_yield_stress.mohr_coulomb.topg_to_phi.phi_max"),
-    topg_min = m_config->get_number("basal_yield_stress.mohr_coulomb.topg_to_phi.topg_min"),
-    topg_max = m_config->get_number("basal_yield_stress.mohr_coulomb.topg_to_phi.topg_max");
-
-  m_log->message(2,
-                 "  till friction angle (phi) is piecewise-linear function of bed elev (topg):\n"
-                 "            /  %5.2f                                 for   topg < %.f\n"
-                 "      phi = |  %5.2f + (topg - (%.f)) * (%.2f / %.f)   for   %.f < topg < %.f\n"
-                 "            \\  %5.2f                                 for   %.f < topg\n",
-                 phi_min, topg_min,
-                 phi_min, topg_min, phi_max - phi_min, topg_max - topg_min, topg_min, topg_max,
-                 phi_max, topg_max);
-
-  if (phi_min >= phi_max) {
-    throw RuntimeError(PISM_ERROR_LOCATION,
-                       "invalid -topg_to_phi arguments: phi_min < phi_max is required");
-  }
-
-  if (topg_min >= topg_max) {
-    throw RuntimeError(PISM_ERROR_LOCATION,
-                       "invalid -topg_to_phi arguments: topg_min < topg_max is required");
-  }
-
-  const double slope = (phi_max - phi_min) / (topg_max - topg_min);
-
-  array::AccessScope list{&bed_topography, &result};
-
-  for (auto p = m_grid->points(); p; p.next()) {
-    const int i = p.i(), j = p.j();
-    const double bed = bed_topography(i, j);
-
-    if (bed <= topg_min) {
-      result(i, j) = phi_min;
-    } else if (bed >= topg_max) {
-      result(i, j) = phi_max;
-    } else {
-      result(i, j) = phi_min + (bed - topg_min) * slope;
-    }
-  }
-
-  // communicate ghosts so that the tauc computation can be performed locally
-  // (including ghosts of tauc, that is)
-  result.update_ghosts();
-}
-
-/*!
- * Compute the till friction angle in grounded areas using available basal yield stress,
- * till water thickness, and overburden pressure.
- *
- * This is the inverse of the formula used by `update_impl()`.
- */
-void MohrCoulombYieldStress::till_friction_angle(const array::Scalar &basal_yield_stress,
-                                                 const array::Scalar &till_water_thickness,
-                                                 const array::Scalar &ice_thickness,
-                                                 const array::CellType &cell_type,
-                                                 array::Scalar &result) {
-
-  MohrCoulombPointwise mc(m_config);
-
-  double
-    ice_density      = m_config->get_number("constants.ice.density"),
-    standard_gravity = m_config->get_number("constants.standard_gravity");
-
-  double
-    delta = m_config->get_number("basal_yield_stress.mohr_coulomb.till_effective_fraction_overburden");
-
-  const array::Scalar
-    &W_till = till_water_thickness;
-
-  array::AccessScope list{&cell_type, &basal_yield_stress, &W_till, &ice_thickness, &result};
-
-  for (auto p = m_grid->points(); p; p.next()) {
-    const int i = p.i(), j = p.j();
-
-    if (cell_type.ocean(i, j) or cell_type.ice_free(i, j)) {
-      // no change
-    } else { // grounded and there is some ice
-      double P_overburden = ice_density * standard_gravity * ice_thickness(i, j);
-
-      result(i, j) = mc.till_friction_angle(delta, P_overburden, W_till(i, j), basal_yield_stress(i, j));
-    }
-  }
-
-  result.update_ghosts();
-}
-
-DiagnosticList MohrCoulombYieldStress::diagnostics_impl() const {
-  return combine({{"tillphi", Diagnostic::wrap(m_till_phi)}},
-                 YieldStress::diagnostics_impl());
+DiagnosticList GowanYieldStress::diagnostics_impl() const {
+  return combine({
+      {"effective_pressure", Diagnostic::wrap(m_effective_pressure)},
+      {"sliding_mechanism",  Diagnostic::wrap(m_sliding_mechanism)},
+      {"till_cover_local",   Diagnostic::wrap(m_till_cover_local)},
+      {"hydro_tauc",         Diagnostic::wrap(hydro_tauc)},
+      {"tauc_ratio",         Diagnostic::wrap(tauc_ratio)}
+    },
+    MohrCoulombYieldStress::diagnostics_impl());  // include base diagnostics
 }
 
 } // end of namespace pism

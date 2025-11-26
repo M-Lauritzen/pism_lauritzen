@@ -16,21 +16,22 @@
 // along with PISM; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-#ifndef _PISMMOHRCOULOMBYIELDSTRESS_H_
-#define _PISMMOHRCOULOMBYIELDSTRESS_H_
+#ifndef _PISMGOWANYIELDSTRESS_H_
+#define _PISMGOWANYIELDSTRESS_H_
 
 #include "pism/basalstrength/YieldStress.hh"
+#include "pism/basalstrength/MohrCoulombYieldStress.hh"
+#include "pism/hydrology/Hydrology.hh"
 
 namespace pism {
 
 //! @brief PISM's default basal yield stress model which applies the
 //! Mohr-Coulomb model of deformable, pressurized till.
-class MohrCoulombYieldStress : public YieldStress {
+class GowanYieldStress : public MohrCoulombYieldStress {
 public:
-  MohrCoulombYieldStress(std::shared_ptr<const Grid> g);
-  virtual ~MohrCoulombYieldStress() = default;
+  GowanYieldStress(std::shared_ptr<const Grid> g);
+  virtual ~GowanYieldStress() = default;
 
-  void set_till_friction_angle(const array::Scalar &input);
 protected:
   void restart_impl(const File &input_file, int record);
   void bootstrap_impl(const File &input_file, const YieldStressInputs &inputs);
@@ -41,14 +42,25 @@ protected:
 
   DiagnosticList diagnostics_impl() const;
 
-  MaxTimestep max_timestep_impl(double t) const;
   void update_impl(const YieldStressInputs &inputs, double t, double dt);
 
   void finish_initialization(const YieldStressInputs &inputs);
 
-  array::Scalar m_till_phi;
 
   std::shared_ptr<array::Forcing> m_delta;
+
+  hydrology::Hydrology *m_hydrology;  // pointer to hydrology model
+
+  array::Scalar m_effective_pressure;   // effective pressure from hydrology
+  array::Scalar m_sliding_mechanism;    // identifies which sliding regime applies
+  array::Scalar m_till_cover_local;     // local sediment fraction
+  array::Scalar m_velocity_temp;        // hydrology velocity field
+  array::Scalar hydro_tauc;             // yield stress computed in hydrology
+  array::Scalar tauc_ratio;             // ratio between hydrology and sediment tauc
+  array::Scalar m_till_phi;             // till friction angle
+
+  double m_dx, m_dy;
+
 private:
   void till_friction_angle(const array::Scalar &bed_topography,
                            array::Scalar &result);
@@ -58,8 +70,10 @@ private:
                            const array::Scalar &ice_thickness,
                            const array::CellType &cell_type,
                            array::Scalar &result);
+  void set_default_fields();
 };
 
 } // end of namespace pism
 
-#endif /* _PISMMOHRCOULOMBYIELDSTRESS_H_ */
+#endif /* _PISMGOWANYIELDSTRESS_H_ */
+

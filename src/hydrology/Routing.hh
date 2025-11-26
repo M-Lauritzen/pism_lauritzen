@@ -86,6 +86,8 @@ public:
 
   const array::Scalar& subglacial_water_pressure() const;
   const array::Staggered& velocity_staggered() const;
+  
+  const array::Scalar& hydraulic_potential_gradient() const { return m_hydro_grad_magnitude; }
 
 protected:
   virtual void restart_impl(const File &input_file, int record);
@@ -133,6 +135,9 @@ protected:
   double m_rg;
 
   array::Scalar1 m_bottom_surface;
+
+  // cell-centered hydraulic gradient magnitude (mutable so it can be computed in const methods)
+  mutable array::Scalar m_hydro_grad_magnitude;
 
   void water_thickness_staggered(const array::Scalar &W,
                                  const array::CellType1 &mask,

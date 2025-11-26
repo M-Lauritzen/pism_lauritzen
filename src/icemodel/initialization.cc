@@ -22,6 +22,7 @@
 #include "pism/icemodel/IceModel.hh"
 #include "pism/basalstrength/ConstantYieldStress.hh"
 #include "pism/basalstrength/MohrCoulombYieldStress.hh"
+#include "pism/basalstrength/GowanYieldStress.hh"
 #include "pism/basalstrength/OptTillphiYieldStress.hh"
 #include "pism/frontretreat/util/IcebergRemover.hh"
 #include "pism/frontretreat/util/IcebergRemoverFEM.hh"
@@ -645,6 +646,8 @@ void IceModel::allocate_basal_yield_stress() {
       m_basal_yield_stress_model = std::make_shared<ConstantYieldStress>(m_grid);
     } else if (yield_stress_model == "mohr_coulomb") {
       m_basal_yield_stress_model = std::make_shared<MohrCoulombYieldStress>(m_grid);
+    } else if (yield_stress_model == "gowan") {
+      m_basal_yield_stress_model = std::make_shared<GowanYieldStress>(m_grid);
     } else if (yield_stress_model == "tillphi_opt") {
       m_basal_yield_stress_model = std::make_shared<OptTillphiYieldStress>(m_grid);
     } else {

@@ -29,6 +29,7 @@
 #include "pism/frontretreat/util/IcebergRemover.hh"
 #include "pism/energy/BedThermalUnit.hh"
 #include "pism/hydrology/Hydrology.hh"
+#include "pism/hydrology/Routing.hh"
 #include "pism/stressbalance/StressBalance.hh"
 #include "pism/util/Grid.hh"
 #include "pism/util/ConfigInterface.hh"
@@ -367,6 +368,13 @@ YieldStressInputs IceModel::yield_stress_inputs() {
   result.geometry                   = &m_geometry;
   result.till_water_thickness       = &m_subglacial_hydrology->till_water_thickness();
   result.subglacial_water_thickness = &m_subglacial_hydrology->subglacial_water_thickness();
+  result.hydrology_flux             = &m_subglacial_hydrology->flux();
+  result.hydrology_gradient         = nullptr;
+  
+  // Add hydraulic gradient *only if Routing hydrology is active*
+  if (auto routing = dynamic_cast<const hydrology::Routing*>(m_subglacial_hydrology.get())) {
+    result.hydrology_gradient = &routing->hydraulic_potential_gradient();
+  }
 
   return result;
 }

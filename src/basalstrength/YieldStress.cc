@@ -29,6 +29,8 @@ YieldStressInputs::YieldStressInputs() {
   no_model_mask              = nullptr;
   till_water_thickness       = nullptr;
   subglacial_water_thickness = nullptr;
+  hydrology_flux             = nullptr;
+  hydrology_gradient         = nullptr;
 }
 
 YieldStress::YieldStress(std::shared_ptr<const Grid> g)

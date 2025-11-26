@@ -41,6 +41,7 @@ add_library (libpism
   age/Isochrones.cc
   basalstrength/ConstantYieldStress.cc
   basalstrength/MohrCoulombYieldStress.cc
+  basalstrength/GowanYieldStress.cc
   basalstrength/MohrCoulombPointwise.cc
   basalstrength/OptTillphiYieldStress.cc
   basalstrength/YieldStress.cc

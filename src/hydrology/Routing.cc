@@ -255,7 +255,9 @@ Routing::Routing(std::shared_ptr<const Grid> grid)
     m_R(grid, "potential_workspace"), /* box stencil used */
     m_dx(grid->dx()),
     m_dy(grid->dy()),
-    m_bottom_surface(grid, "ice_bottom_surface_elevation") {
+    m_bottom_surface(grid, "ice_bottom_surface_elevation"),
+    m_hydro_grad_magnitude(grid, "hydro_grad_magnitude")
+{
 
   m_rg = (m_config->get_number("constants.fresh_water.density") *
           m_config->get_number("constants.standard_gravity"));
@@ -297,6 +299,10 @@ Routing::Routing(std::shared_ptr<const Grid> grid)
       .long_name("new thickness of till (subglacial) water layer during update")
       .units("m");
   m_Wtillnew.metadata()["valid_min"] = { 0.0 };
+
+  m_hydro_grad_magnitude.metadata(0)
+      .long_name("subglacial water hydraulic potential gradient magnitude")
+      .units("Pa m^-1");
 
   {
     double alpha = m_config->get_number("hydrology.thickness_power_in_flux");
@@ -472,6 +478,19 @@ void Routing::compute_conductivity(const array::Staggered &W,
         dRdy = (m_R(i, j + 1) - m_R(i, j)) / m_dy;
         result(i, j, 1) = dRdx * dRdx + dRdy * dRdy;
       }
+
+      array::AccessScope grad_list{&m_R, &m_hydro_grad_magnitude};
+      double dx = m_dx, dy = m_dy;
+
+      for (auto p = m_grid->points(); p; p.next()) {
+        const int i = p.i(), j = p.j();
+        double dRdx = (m_R(i + 1, j) - m_R(i - 1, j)) / (2.0 * dx);
+        double dRdy = (m_R(i, j + 1) - m_R(i, j - 1)) / (2.0 * dy);
+        m_hydro_grad_magnitude(i, j) = std::sqrt(dRdx * dRdx + dRdy * dRdy);
+      }
+
+      m_hydro_grad_magnitude.update_ghosts();
+
     }
 
     // We regularize negative power |\grad psi|^{beta-2} by adding eps because large

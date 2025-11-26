@@ -515,6 +515,11 @@ const array::Vector &Hydrology::flux() const {
   return m_Q;
 }
 
+const array::Scalar &Hydrology::hydraulic_potential_gradient() const {
+  throw RuntimeError(PISM_ERROR_LOCATION,
+                     "This hydrology model does not provide a hydraulic potential gradient.");
+}
+
 const array::Scalar &Hydrology::surface_input_rate() const {
   return m_surface_input_rate;
 }

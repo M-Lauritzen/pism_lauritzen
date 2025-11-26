@@ -359,7 +359,7 @@ netcdf pism_config {
     pism_config:basal_yield_stress.ice_free_bedrock_units = "Pascal";
 
     pism_config:basal_yield_stress.model = "mohr_coulomb";
-    pism_config:basal_yield_stress.model_choices = "constant,mohr_coulomb,tillphi_opt";
+    pism_config:basal_yield_stress.model_choices = "constant,mohr_coulomb,gowan,tillphi_opt";
     pism_config:basal_yield_stress.model_doc = "The basal yield stress model to use when sliding is active.";
     pism_config:basal_yield_stress.model_option = "yield_stress";
     pism_config:basal_yield_stress.model_type = "keyword";
@@ -506,6 +506,47 @@ netcdf pism_config {
     pism_config:basal_yield_stress.mohr_coulomb.topg_to_phi.topg_min_option = "topg_min";
     pism_config:basal_yield_stress.mohr_coulomb.topg_to_phi.topg_min_type = "number";
     pism_config:basal_yield_stress.mohr_coulomb.topg_to_phi.topg_min_units = "meters";
+
+    // added by Gowan
+
+    pism_config:basal_yield_stress.gowan.rocky_phi = 15.0;
+    pism_config:basal_yield_stress.gowan.rocky_phi_doc = "angle for Coulomb friction law for hydrology based sliding over non-sediment covered areas";
+    pism_config:basal_yield_stress.gowan.rocky_phi_option = "rocky_phi";
+    pism_config:basal_yield_stress.gowan.rocky_phi_type = "number";
+    pism_config:basal_yield_stress.gowan.rocky_phi_units = "degrees";
+
+    pism_config:basal_yield_stress.gowan.seddy_phi = 5.0;
+    pism_config:basal_yield_stress.gowan.seddy_phi_doc = "angle for Coulomb friction law for hydrology based sliding over sediment covered areas";
+    pism_config:basal_yield_stress.gowan.seddy_phi_option = "seddy_phi";
+    pism_config:basal_yield_stress.gowan.seddy_phi_type = "number";
+    pism_config:basal_yield_stress.gowan.seddy_phi_units = "degrees";
+
+    pism_config:basal_yield_stress.gowan.ice_rock_yield_stress = 1.0e5;
+    pism_config:basal_yield_stress.gowan.ice_rock_yield_stress_doc = "Maximum yield stress for areas not covered by sediment, set by default to be the yield stress of ice";
+    pism_config:basal_yield_stress.gowan.ice_rock_yield_stress_option = "ice_rock_stress";
+    pism_config:basal_yield_stress.gowan.ice_rock_yield_stress_type = "number";
+    pism_config:basal_yield_stress.gowan.ice_rock_yield_stress_units = "Pa";
+
+    // based on distance between eskers on the Canadian Shield, see Storrar et al 2014
+    pism_config:basal_yield_stress.gowan.Rothsliberger_distance = 12000.0;
+    pism_config:basal_yield_stress.gowan.Rothsliberger_distance_doc = "distance between R-channels";
+    pism_config:basal_yield_stress.gowan.Rothsliberger_distance_option = "Rothsliberger_distance";
+    pism_config:basal_yield_stress.gowan.Rothsliberger_distance_type = "number";
+    pism_config:basal_yield_stress.gowan.Rothsliberger_distance_units = "meters";
+
+    pism_config:basal_yield_stress.gowan.protrusion_height = 0.1;
+    pism_config:basal_yield_stress.gowan.protrusion_height_doc = "Height of cavity protruison";
+    pism_config:basal_yield_stress.gowan.protrusion_height_option = "protrusion_height";
+    pism_config:basal_yield_stress.gowan.protrusion_height_type = "number";
+    pism_config:basal_yield_stress.gowan.protrusion_height_units = "meters";
+
+    pism_config:basal_yield_stress.gowan.till_fraction_coverage = 1.0;
+    pism_config:basal_yield_stress.gowan.till_fraction_coverage_doc = "Fraction of base that is covered by sediments";
+    pism_config:basal_yield_stress.gowan.till_fraction_coverage_option = "till_fraction_coverage";
+    pism_config:basal_yield_stress.gowan.till_fraction_coverage_type = "number";
+    pism_config:basal_yield_stress.gowan.till_fraction_coverage_units = "pure number";
+
+
 
     pism_config:basal_yield_stress.slippery_grounding_lines = "no";
     pism_config:basal_yield_stress.slippery_grounding_lines_doc = "If yes, at icy grounded locations with bed elevations below sea level, within one cell of floating ice or ice-free ocean, make tauc as low as possible from the Mohr-Coulomb relation.  Specifically, at such locations replace the normally-computed tauc from the Mohr-Coulomb relation, which uses the effective pressure from the modeled amount of water in the till, by the minimum value of tauc from Mohr-Coulomb, i.e. by using the effective pressure corresponding to the maximum amount of till-stored water.  Does not alter the modeled or reported amount of till water, nor does this mechanism affect water conservation.";
